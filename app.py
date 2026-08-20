@@ -8,12 +8,12 @@ from streamlit_gsheets import GSheetsConnection
 import http.client
 import logging
 
-# Enable HTTP connection debug logging (for urllib / http.client)
-http.client.HTTPConnection.debuglevel = 1
+# # Enable HTTP connection debug logging (for urllib / http.client)
+# http.client.HTTPConnection.debuglevel = 1
 
-# Enable logging for urllib3 and requests
-logging.basicConfig(level=logging.DEBUG)
-logging.getLogger("urllib3").setLevel(logging.DEBUG)
+# # Enable logging for urllib3 and requests
+# logging.basicConfig(level=logging.DEBUG)
+# logging.getLogger("urllib3").setLevel(logging.DEBUG)
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Padel Pro Manager", page_icon="🎾", layout="wide")
@@ -22,24 +22,23 @@ st.set_page_config(page_title="Padel Pro Manager", page_icon="🎾", layout="wid
 ADMIN_PASSCODE = st.secrets.get("ADMIN_PASSCODE", "26022026")
 USER_PASSCODE = st.secrets.get("USER_PASSCODE", "3698")
 
-GSHEET_URL = st.secrets["connections"]["gsheets"]["spreadsheet"]
-print(f"GSHEET_URL: {GSHEET_URL}")
+# Извлекаем ID таблицы
+GSHEET_ID = st.secrets["connections"]["gsheets"]["id"]
+GSHEET_URL = f"https://docs.google.com/spreadsheets/d/{GSHEET_ID}/edit?usp=sharing"
 
 # --- DATABASE CONNECTION ---
 conn = st.connection("gsheets", type=GSheetsConnection)
-# sheet name -> gid mapping
-g_sheets = {
-    "Players": 0,
-    "Rotations": 293644729,
-}
 
 def get_players():
-    return conn.read(spreadsheet=GSHEET_URL, worksheet=g_sheets["Players"], ttl=0)
+    # Запрос через Google Visualization API с именем вкладки (гарантирует HTTP 200)
+    url = f"https://docs.google.com/spreadsheets/d/{GSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Players"
+    return pd.read_csv(url)
 
 def get_all_rotations():
-    return conn.read(spreadsheet=GSHEET_URL, worksheet=g_sheets["Rotations"], ttl=0)
+    url = f"https://docs.google.com/spreadsheets/d/{GSHEET_ID}/gviz/tq?tqx=out:csv&sheet=Rotations"
+    return pd.read_csv(url)
 
-# --- AUTHORIZATION (Point 2 & 3) ---
+# --- AUTHORIZATION ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
 if 'role' not in st.session_state:
@@ -73,14 +72,13 @@ if login():
 
     daily_data = all_rotations[all_rotations['Date'] == date_str] if not all_rotations.empty else pd.DataFrame()
 
-    # --- ADMIN SIDEBAR (Point 5 Layout Updates) ---
+    # --- ADMIN SIDEBAR ---
     if st.session_state.role == 'admin':
         st.sidebar.title("🛠️ Admin Control")
         
         all_names = players_df['Name'].tolist() if 'Name' in players_df.columns else []
         
         # 1. Player count BEFORE search bar
-        # selected_names = st.sidebar.session_state.get('selected_players_key', [])
         selected_names = st.session_state.get('selected_players_key', [])
         count = len(selected_names)
         st.sidebar.markdown(f"### Selected players: `{count}` / Total: `{len(all_names)}`")
@@ -130,7 +128,7 @@ if login():
             st.session_state.authenticated = False
             st.rerun()
 
-    # --- MAIN CONTENT DISPLAY (Point 1 & 4 Table View) ---
+    # --- MAIN CONTENT DISPLAY ---
     if not daily_data.empty:
         st.success(f"Schedule for {date_str}")
         for r_name in daily_data['Round'].unique():

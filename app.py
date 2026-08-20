@@ -1,107 +1,128 @@
 import streamlit as st
 import random
-import os
+import pandas as pd
+from datetime import date
+from streamlit_gsheets import GSheetsConnection
 
 # --- PAGE CONFIGURATION ---
-st.set_page_config(page_title="Sports Rotator Pro", page_icon="🎾", layout="wide")
+st.set_page_config(page_title="Padel Pro Manager", page_icon="🎾", layout="wide")
 
-def load_players():
-    players = []
-    if os.path.exists("players.txt"):
-        with open("players.txt", "r", encoding="utf-8") as f:
-            for line in f:
-                if "," in line:
-                    name, score = line.strip().split(",")
-                    players.append({"name": name.strip(), "score": int(score.strip())})
-    return sorted(players, key=lambda x: x['name'])
+# Read passcodes securely from Streamlit Secrets / Environment Variables
+ADMIN_PASSCODE = st.secrets.get("ADMIN_PASSCODE", "26022026")
+USER_PASSCODE = st.secrets.get("USER_PASSCODE", "3698")
 
-def generate_rotation(selected_players):
-    played_together = set()
-    all_rounds_data = []
-    
-    for round_num in range(1, 4):
-        success = False
-        temp_pairs = []
-        
-        # Try to assemble a round (up to 300 attempts)
-        for _ in range(300):
-            pool = selected_players[:]
-            random.shuffle(pool)
-            round_pairs = []
-            temp_history = played_together.copy()
-            possible = True
-            
-            while len(pool) >= 2:
-                p1 = pool.pop(0)
-                found = False
-                for i in range(len(pool)):
-                    pair = tuple(sorted([p1['name'], pool[i]['name']]))
-                    if pair not in temp_history:
-                        p2 = pool.pop(i)
-                        round_pairs.append((p1, p2))
-                        temp_history.add(pair)
-                        found = True
-                        break
-                if not found:
-                    possible = False
-                    break
-            
-            if possible and len(pool) < 2:
-                played_together = temp_history
-                temp_pairs = round_pairs
-                success = True
-                break
-        
-        all_rounds_data.append((round_num, temp_pairs))
-    return all_rounds_data
+GSHEET_URL = st.secrets["connections"]["gsheets"]["spreadsheet"]
 
-# --- INTERFACE ---
-st.title("🏆 Sports Community Rotator")
+# --- DATABASE CONNECTION ---
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-players_data = load_players()
-names = [p['name'] for p in players_data]
+def get_players():
+    return conn.read(spreadsheet=GSHEET_URL, worksheet="Players", ttl=0)
 
-st.sidebar.header("Settings")
-selected_names = st.sidebar.multiselect("Select players for today:", names)
+def get_all_rotations():
+    return conn.read(spreadsheet=GSHEET_URL, worksheet="Rotations", ttl=0)
 
-# Improved counter
-count = len(selected_names)
-if count == 12:
-    st.sidebar.success(f"✅ Perfect: {count} players selected")
-elif count > 0 and count % 4 == 0:
-    st.sidebar.info(f"✅ Ready: {count} players ({count // 4} courts)")
-else:
-    st.sidebar.warning(f"⚠️ Selected: {count}. Need a multiple of 4 (8, 12, 16...)")
+# --- AUTHORIZATION (Point 2 & 3) ---
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'role' not in st.session_state:
+    st.session_state.role = None
 
-# Generate button
-if st.sidebar.button("Generate Rotation", disabled=(count < 2)):
-    if count % 2 != 0:
-        st.error("Error: The number of players must be even!")
-    else:
-        active_players = [p for p in players_data if p['name'] in selected_names]
-        results = generate_rotation(active_players)
-        
-        for r_num, pairs in results:
-            st.markdown(f"## 📍 ROUND {r_num}")
-            # Sort pairs by skill for balanced matches
-            pairs.sort(key=lambda x: x[0]['score'] + x[1]['score'], reverse=True)
-            
-            # Dynamic court generation
-            num_courts = len(pairs) // 2
-            if num_courts > 0:
-                cols = st.columns(num_courts)
-                for court_idx in range(num_courts):
-                    with cols[court_idx]:
-                        st.subheader(f"🏟️ COURT {court_idx + 1}")
-                        t1, t2 = pairs[court_idx * 2], pairs[court_idx * 2 + 1]
-                        
-                        score1 = t1[0]['score'] + t1[1]['score']
-                        score2 = t2[0]['score'] + t2[1]['score']
-                        
-                        st.info(f"**Team A** (Power: {score1})\n\n{t1[0]['name']} + {t1[1]['name']}")
-                        st.write("🆚")
-                        st.warning(f"**Team B** (Power: {score2})\n\n{t2[0]['name']} + {t2[1]['name']}")
+def login():
+    if not st.session_state.authenticated:
+        st.title("🔐 Padel Community Access")
+        pwd = st.text_input("Enter Passcode:", type="password")
+        if st.button("Login"):
+            if pwd == ADMIN_PASSCODE:
+                st.session_state.authenticated = True
+                st.session_state.role = 'admin'
+                st.rerun()
+            elif pwd == USER_PASSCODE:
+                st.session_state.authenticated = True
+                st.session_state.role = 'user'
+                st.rerun()
             else:
-                # For 1 pair only (2 vs 2)
-                st.info(f"🤝 Training Match: {pairs[0][0]['name']} + {pairs[0][1]['name']}")
-            st.divider()
+                st.error("Invalid Passcode")
+        return False
+    return True
+
+if login():
+    players_df = get_players()
+    all_rotations = get_all_rotations()
+    
+    st.title("🎾 Padel Match Day")
+    selected_date = st.date_input("📅 Select Date", date.today())
+    date_str = str(selected_date)
+
+    daily_data = all_rotations[all_rotations['Date'] == date_str] if not all_rotations.empty else pd.DataFrame()
+
+    # --- ADMIN SIDEBAR (Point 5 Layout Updates) ---
+    if st.session_state.role == 'admin':
+        st.sidebar.title("🛠️ Admin Control")
+        
+        all_names = players_df['Name'].tolist() if 'Name' in players_df.columns else []
+        
+        # 1. Player count BEFORE search bar
+        selected_names = st.sidebar.session_state.get('selected_players_key', [])
+        count = len(selected_names)
+        st.sidebar.markdown(f"### Selected players: `{count}` / Total: `{len(all_names)}`")
+
+        # 2. Generate button BEFORE search bar
+        generate_btn = st.sidebar.button("🚀 Generate & Save Rotation", use_container_width=True)
+
+        st.sidebar.divider()
+
+        # 3. Searchable selection list filling down the sidebar
+        selected_names = st.sidebar.multiselect(
+            "Search and select players:",
+            options=all_names,
+            key='selected_players_key',
+            help="Type player name to filter"
+        )
+
+        if generate_btn:
+            if count >= 4 and count % 4 == 0:
+                active_players = players_df[players_df['Name'].isin(selected_names)].to_dict('records')
+                new_rows = []
+                
+                for r_num in range(1, 4):
+                    random.shuffle(active_players)
+                    for i in range(0, len(active_players), 4):
+                        g = active_players[i:i+4]
+                        new_rows.append({
+                            "Date": date_str,
+                            "Round": f"Round {r_num}",
+                            "Court": f"Court {(i//4)+1}",
+                            "Team A": f"{g[0]['Name']} & {g[1]['Name']}",
+                            "Team B": f"{g[2]['Name']} & {g[3]['Name']}"
+                        })
+                
+                new_df = pd.DataFrame(new_rows)
+                updated_db = pd.concat([all_rotations, new_df], ignore_index=True) if not all_rotations.empty else new_df
+                conn.update(spreadsheet=GSHEET_URL, worksheet="Rotations", data=updated_db)
+                st.sidebar.success(f"Saved for {date_str}!")
+                st.rerun()
+            else:
+                st.sidebar.error("Select a multiple of 4 players (8, 12, 16...).")
+
+        if st.sidebar.checkbox("Show Power Levels (Admin Only)"):
+            st.sidebar.dataframe(players_df)
+            
+        if st.sidebar.button("Logout"):
+            st.session_state.authenticated = False
+            st.rerun()
+
+    # --- MAIN CONTENT DISPLAY (Point 1 & 4 Table View) ---
+    if not daily_data.empty:
+        st.success(f"Schedule for {date_str}")
+        for r_name in daily_data['Round'].unique():
+            st.subheader(f"📍 {r_name}")
+            table_to_show = daily_data[daily_data['Round'] == r_name]
+            st.table(table_to_show[['Court', 'Team A', 'Team B']].set_index('Court'))
+    else:
+        st.warning(f"No rotation stored for {date_str}.")
+
+    if st.session_state.role == 'user':
+        if st.button("Logout"):
+            st.session_state.authenticated = False
+            st.rerun()

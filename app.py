@@ -4,6 +4,17 @@ import pandas as pd
 from datetime import date
 from streamlit_gsheets import GSheetsConnection
 
+# trace/debug HTTP requests
+import http.client
+import logging
+
+# Enable HTTP connection debug logging (for urllib / http.client)
+http.client.HTTPConnection.debuglevel = 1
+
+# Enable logging for urllib3 and requests
+logging.basicConfig(level=logging.DEBUG)
+logging.getLogger("urllib3").setLevel(logging.DEBUG)
+
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Padel Pro Manager", page_icon="🎾", layout="wide")
 
@@ -12,15 +23,21 @@ ADMIN_PASSCODE = st.secrets.get("ADMIN_PASSCODE", "26022026")
 USER_PASSCODE = st.secrets.get("USER_PASSCODE", "3698")
 
 GSHEET_URL = st.secrets["connections"]["gsheets"]["spreadsheet"]
+print(f"GSHEET_URL: {GSHEET_URL}")
 
 # --- DATABASE CONNECTION ---
 conn = st.connection("gsheets", type=GSheetsConnection)
+# sheet name -> gid mapping
+g_sheets = {
+    "Players": 0,
+    "Rotations": 293644729,
+}
 
 def get_players():
-    return conn.read(spreadsheet=GSHEET_URL, worksheet="Players", ttl=0)
+    return conn.read(spreadsheet=GSHEET_URL, worksheet=g_sheets["Players"], ttl=0)
 
 def get_all_rotations():
-    return conn.read(spreadsheet=GSHEET_URL, worksheet="Rotations", ttl=0)
+    return conn.read(spreadsheet=GSHEET_URL, worksheet=g_sheets["Rotations"], ttl=0)
 
 # --- AUTHORIZATION (Point 2 & 3) ---
 if 'authenticated' not in st.session_state:
@@ -63,7 +80,8 @@ if login():
         all_names = players_df['Name'].tolist() if 'Name' in players_df.columns else []
         
         # 1. Player count BEFORE search bar
-        selected_names = st.sidebar.session_state.get('selected_players_key', [])
+        # selected_names = st.sidebar.session_state.get('selected_players_key', [])
+        selected_names = st.session_state.get('selected_players_key', [])
         count = len(selected_names)
         st.sidebar.markdown(f"### Selected players: `{count}` / Total: `{len(all_names)}`")
 
